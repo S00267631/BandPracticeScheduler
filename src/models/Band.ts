@@ -10,7 +10,6 @@ const bandSchema=new Schema({
     genre: {
 
         type:String,
-        required:[true,"Band genre is required"],
         trim:true,
         maxlength: [50, "Genre cannot exceed 50 characters"],
 
@@ -33,3 +32,4 @@ const bandSchema=new Schema({
         versionKey:false,
     },
 );
+export const BandModel = model("Band", bandSchema);
