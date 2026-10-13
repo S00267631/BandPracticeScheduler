@@ -99,6 +99,17 @@ export const deleteBand: RequestHandler = async (request, response, next) => {
       return;
     }
 
+    // Missing bands must return 404 even if orphaned sessions reference the ID.
+    const bandExists = await BandModel.exists({ _id: bandId });
+
+    if (!bandExists) {
+      response.status(404).json({
+        error: "NotFound",
+        message: "Band not found",
+      });
+      return;
+    }
+
     const practiceCount = await PracticeSessionModel.countDocuments({
       bandId,
     });
