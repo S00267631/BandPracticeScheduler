@@ -1,6 +1,7 @@
 import express from "express";
 import { errorHandler } from "./middleware/errorHandler";
 import { bandRouter } from "./routes/band.routes";
+import { practiceSessionRouter } from "./routes/practiceSession.routes";
 
 export const app = express();
 
@@ -11,6 +12,7 @@ app.get("/health", (_request, response) => {
 });
 
 app.use("/api/bands", bandRouter);
+app.use("/api/practice-sessions", practiceSessionRouter);
 
 // A missing route is not an unexpected server error.
 app.use((request, response) => {
