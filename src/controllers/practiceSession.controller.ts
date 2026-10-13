@@ -1,8 +1,9 @@
 import { type RequestHandler } from "express";
-import { isValidObjectId } from "mongoose";
+import { isValidObjectId, type InferSchemaType, type QueryFilter } from "mongoose";
 import { BandModel } from "../models/Band";
 import { PracticeSessionModel } from "../models/PracticeSession";
 import { type CreatePracticeSessionInput } from "../schemas/practiceSession.schema";
+import { practiceSessionQuerySchema } from "../schemas/practiceSessionQuery.schema";
 
 function getValidatedPracticeSessionId(
   id: string | string[] | undefined,
@@ -50,14 +51,47 @@ export const createPracticeSession: RequestHandler<
 };
 
 export const getPracticeSessions: RequestHandler = async (
-  _request,
+  request,
   response,
   next,
 ) => {
   try {
-    // The ID breaks ties when two sessions have the same start time.
-    const practiceSessions = await PracticeSessionModel.find().sort({
-      startAt: 1,
+    const result = practiceSessionQuerySchema.safeParse(request.query);
+
+    if (!result.success) {
+      response.status(400).json({
+        error: "ValidationError",
+        message: "Query parameters are invalid",
+        details: result.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      });
+      return;
+    }
+
+    const { bandId, status, from, to, sortBy, order } = result.data;
+    // Build a filter from allowed values rather than passing user query objects.
+    const filter: QueryFilter<InferSchemaType<typeof PracticeSessionModel.schema>> = {};
+
+    if (bandId) {
+      filter.bandId = bandId;
+    }
+
+    if (status) {
+      filter.status = status;
+    }
+
+    if (from || to) {
+      filter.startAt = {
+        ...(from ? { $gte: from } : {}),
+        ...(to ? { $lte: to } : {}),
+      };
+    }
+
+    // The ID gives a stable order when two sessions share the chosen sort value.
+    const practiceSessions = await PracticeSessionModel.find(filter).sort({
+      [sortBy]: order === "asc" ? 1 : -1,
       _id: 1,
     });
     response.status(200).json(practiceSessions);
