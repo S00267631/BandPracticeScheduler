@@ -1,5 +1,5 @@
-import { type Server } from "node:http";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import request from "supertest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Exercise the real Express routes and Zod validation without using Atlas.
 const database = vi.hoisted(() => ({
@@ -39,30 +39,7 @@ const validBody = {
 };
 const savedSession = { _id: sessionId, ...validBody, status: "scheduled" };
 
-let server: Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-  server = await new Promise<Server>((resolve, reject) => {
-    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
-    listener.once("error", reject);
-  });
-  const address = server.address();
-
-  if (!address || typeof address === "string") {
-    throw new Error("Test server did not receive a TCP port");
-  }
-
-  baseUrl = `http://127.0.0.1:${address.port}/api/practice-sessions`;
-});
-
-afterAll(async () => {
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
+const basePath = "/api/practice-sessions";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -78,12 +55,12 @@ beforeEach(() => {
   database.findByIdAndDelete.mockResolvedValue(savedSession);
 });
 
-function writeRequest(method: string, body: unknown, path = "") {
-  return fetch(`${baseUrl}${path}`, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+function writeRequest(method: "POST" | "PUT", body: object, path = "") {
+  const client = request(app);
+  const pendingRequest = method === "POST"
+    ? client.post(`${basePath}${path}`)
+    : client.put(`${basePath}${path}`);
+  return pendingRequest.send(body);
 }
 
 describe("Practice Session CRUD", () => {
@@ -91,7 +68,7 @@ describe("Practice Session CRUD", () => {
     const response = await writeRequest("POST", validBody);
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual(savedSession);
+    expect(response.body).toEqual(savedSession);
     expect(database.bandExists).toHaveBeenCalledWith({ _id: bandId });
     expect(database.create).toHaveBeenCalledWith(validBody);
   });
@@ -101,7 +78,7 @@ describe("Practice Session CRUD", () => {
     const response = await writeRequest("POST", validBody);
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "NotFound",
       message: "Band not found",
     });
@@ -127,35 +104,35 @@ describe("Practice Session CRUD", () => {
   });
 
   it("lists sessions in chronological order", async () => {
-    const response = await fetch(baseUrl);
+    const response = await request(app).get(basePath);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([savedSession]);
+    expect(response.body).toEqual([savedSession]);
     expect(database.sort).toHaveBeenCalledWith({ startAt: 1, _id: 1 });
   });
 
   it("returns an empty array when there are no sessions", async () => {
     database.sort.mockResolvedValue([]);
-    const response = await fetch(baseUrl);
+    const response = await request(app).get(basePath);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([]);
+    expect(response.body).toEqual([]);
   });
 
   it("retrieves an individual session", async () => {
-    const response = await fetch(`${baseUrl}/${sessionId}`);
+    const response = await request(app).get(`${basePath}/${sessionId}`);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(savedSession);
+    expect(response.body).toEqual(savedSession);
     expect(database.findById).toHaveBeenCalledWith(sessionId);
   });
 
   it("returns 404 for a missing individual session", async () => {
     database.findById.mockResolvedValue(null);
-    const response = await fetch(`${baseUrl}/${sessionId}`);
+    const response = await request(app).get(`${basePath}/${sessionId}`);
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "NotFound",
       message: "Practice session not found",
     });
@@ -166,10 +143,12 @@ describe("Practice Session CRUD", () => {
     async (method) => {
       const response = method === "PUT"
         ? await writeRequest(method, { durationMinutes: 120 }, "/bad-id")
-        : await fetch(`${baseUrl}/bad-id`, { method });
+        : method === "GET"
+          ? await request(app).get(`${basePath}/bad-id`)
+          : await request(app).delete(`${basePath}/bad-id`);
 
       expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({
+      expect(response.body).toEqual({
         error: "InvalidIdentifier",
         message: "Practice session ID must be a valid MongoDB ObjectId",
       });
@@ -187,7 +166,7 @@ describe("Practice Session CRUD", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...savedSession, durationMinutes: 120 });
+    expect(response.body).toEqual({ ...savedSession, durationMinutes: 120 });
     expect(database.findByIdAndUpdate).toHaveBeenCalledWith(
       sessionId,
       { $set: { durationMinutes: 120 } },
@@ -217,16 +196,16 @@ describe("Practice Session CRUD", () => {
   );
 
   it("deletes a session with an empty 204 response", async () => {
-    const response = await fetch(`${baseUrl}/${sessionId}`, { method: "DELETE" });
+    const response = await request(app).delete(`${basePath}/${sessionId}`);
 
     expect(response.status).toBe(204);
-    expect(await response.text()).toBe("");
+    expect(response.text).toBe("");
     expect(database.findByIdAndDelete).toHaveBeenCalledWith(sessionId);
   });
 
   it("returns 404 when deleting a missing session", async () => {
     database.findByIdAndDelete.mockResolvedValue(null);
-    const response = await fetch(`${baseUrl}/${sessionId}`, { method: "DELETE" });
+    const response = await request(app).delete(`${basePath}/${sessionId}`);
 
     expect(response.status).toBe(404);
   });
@@ -236,10 +215,10 @@ describe("Practice Session CRUD", () => {
     database.sort.mockRejectedValue(new Error("Database unavailable"));
 
     try {
-      const response = await fetch(baseUrl);
+      const response = await request(app).get(basePath);
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({
+      expect(response.body).toEqual({
         error: "InternalServerError",
         message: "An unexpected server error occurred",
       });
