@@ -1,0 +1,644 @@
+openapi: 3.0.3
+info:
+  title: Band Practice Scheduler API
+  version: 1.0.0
+  description: |
+    Keep track of bands and their practice sessions.
+
+    Start by creating a band, then copy its returned `_id` into a practice
+    session's `bandId`. The IDs in the examples only show the format, so swap
+    them for IDs from your own requests.
+
+    Use this file as a reference when sending requests with REST Client.
+    POST, PUT and DELETE change data in the database.
+
+    This Part 1 version has no login yet. Dates need a timezone: use `Z` for UTC
+    or an offset such as `+01:00`. Both date-filter boundaries are included.
+    PUT updates only the fields you send; it does not replace the whole record.
+servers:
+  - url: /
+    description: The API server
+security: []
+tags:
+  - name: Bands
+    description: Add a band and keep its details up to date.
+  - name: Practice sessions
+    description: Plan practices and find the ones you need.
+  - name: Server
+    description: Check that the server is responding.
+paths:
+  /health:
+    get:
+      tags: [Server]
+      operationId: getHealth
+      summary: Check that the server is responding
+      description: This returns a simple status. It does not run a database query.
+      responses:
+        '200':
+          description: The server is responding.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+              example: { status: ok }
+  /api/bands:
+    get:
+      tags: [Bands]
+      operationId: getBands
+      summary: List the bands
+      description: Bands are sorted by name. If there are none, you get an empty array.
+      responses:
+        '200':
+          description: The list of bands.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Band'
+              examples:
+                withBands:
+                  value:
+                    - _id: '507f1f77bcf86cd799439011'
+                      name: The Garage Band
+                      genre: Rock
+                      timeZone: Europe/Dublin
+                      description: A band looking for more time to practise.
+                      createdAt: '2026-10-15T12:00:00.000Z'
+                      updatedAt: '2026-10-15T12:00:00.000Z'
+                empty:
+                  value: []
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Bands]
+      operationId: createBand
+      summary: Add a band
+      description: Name and timeZone are required. The other fields can be left out.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBand'
+            example:
+              name: The Garage Band
+              genre: Rock
+              timeZone: Europe/Dublin
+              description: A band looking for more time to practise.
+      responses:
+        '201':
+          $ref: '#/components/responses/BandCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/bands/{id}:
+    parameters:
+      - $ref: '#/components/parameters/BandId'
+    get:
+      tags: [Bands]
+      operationId: getBandById
+      summary: Get one band
+      responses:
+        '200':
+          $ref: '#/components/responses/BandFound'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/BandNotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      tags: [Bands]
+      operationId: updateBand
+      summary: Change a band's details
+      description: Send at least one field. Fields you leave out keep their current values.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBand'
+            example:
+              description: Now practising every Thursday evening.
+      responses:
+        '200':
+          $ref: '#/components/responses/BandFound'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/BandNotFound'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags: [Bands]
+      operationId: deleteBand
+      summary: Delete a band
+      description: |
+        Delete the band's practice sessions first. Any linked sessions, including
+        cancelled or completed ones, block this request with a 409 response.
+        A missing band returns 404. A successful deletion has no response body.
+      responses:
+        '204':
+          description: The band was deleted. There is no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/BandNotFound'
+        '409':
+          description: The band still has practice sessions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Conflict
+                message: Delete the band's practice sessions before deleting the band
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/practice-sessions:
+    get:
+      tags: [Practice sessions]
+      operationId: getPracticeSessions
+      summary: List or search practice sessions
+      description: |
+        Leave the filters out to list everything, or combine them to narrow the
+        results. A band ID with no matching sessions gives an empty array, not a
+        404. Sessions are sorted by start time unless you choose another order.
+
+        The date filters apply to `startAt`, not the practice's finish time.
+        `from` must be on or before `to`. Unknown parameters, repeated parameters
+        and invalid values return 400. There is no pagination in this version.
+      parameters:
+        - name: bandId
+          in: query
+          description: Only show this band's practices.
+          schema:
+            $ref: '#/components/schemas/MongoId'
+        - name: status
+          in: query
+          description: Only show practices with this status.
+          schema:
+            $ref: '#/components/schemas/PracticeStatus'
+        - name: from
+          in: query
+          description: Start time on or after this instant. Include a timezone.
+          schema:
+            $ref: '#/components/schemas/StartTime'
+          example: '2026-11-01T00:00:00Z'
+        - name: to
+          in: query
+          description: Start time on or before this instant. Include a timezone.
+          schema:
+            $ref: '#/components/schemas/StartTime'
+          example: '2026-11-30T23:59:59Z'
+        - name: sortBy
+          in: query
+          description: Choose the field to sort on.
+          schema:
+            type: string
+            enum: [startAt, durationMinutes]
+            default: startAt
+        - name: order
+          in: query
+          description: Ascending or descending. Ties are sorted by ID in ascending order.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        '200':
+          description: Matching practices, or an empty array if none match.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PracticeSession'
+              examples:
+                withSessions:
+                  value:
+                    - _id: '507f1f77bcf86cd799439012'
+                      bandId: '507f1f77bcf86cd799439011'
+                      startAt: '2026-11-05T18:00:00.000Z'
+                      durationMinutes: 90
+                      format: in-person
+                      locationOrLink: Rehearsal room 2
+                      status: scheduled
+                      notes: Bring the new set list.
+                      createdAt: '2026-10-15T12:00:00.000Z'
+                      updatedAt: '2026-10-15T12:00:00.000Z'
+                empty:
+                  value: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Practice sessions]
+      operationId: createPracticeSession
+      summary: Add a practice session
+      description: |
+        Use the ID of an existing band. If you leave out status, the practice is
+        saved as scheduled. Past start times are allowed in this version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePracticeSession'
+            example:
+              bandId: '507f1f77bcf86cd799439011'
+              startAt: '2026-11-05T18:00:00Z'
+              durationMinutes: 90
+              format: in-person
+              locationOrLink: Rehearsal room 2
+              notes: Bring the new set list.
+      responses:
+        '201':
+          description: The practice was added. Keep its returned ID for later requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PracticeSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/BandNotFound'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/practice-sessions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PracticeSessionId'
+    get:
+      tags: [Practice sessions]
+      operationId: getPracticeSessionById
+      summary: Get one practice session
+      responses:
+        '200':
+          $ref: '#/components/responses/PracticeSessionFound'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/PracticeSessionNotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      tags: [Practice sessions]
+      operationId: updatePracticeSession
+      summary: Change a practice session
+      description: |
+        Send at least one editable field. Fields you leave out keep their current
+        values. You cannot change bandId or move a practice to another band.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePracticeSession'
+            example:
+              durationMinutes: 120
+              notes: We need extra time for the new songs.
+      responses:
+        '200':
+          $ref: '#/components/responses/PracticeSessionFound'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/PracticeSessionNotFound'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags: [Practice sessions]
+      operationId: deletePracticeSession
+      summary: Delete a practice session
+      description: This removes the practice but leaves its band in place.
+      responses:
+        '204':
+          description: The practice was deleted. There is no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/PracticeSessionNotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+components:
+  parameters:
+    BandId:
+      name: id
+      in: path
+      required: true
+      description: The band's ID from an earlier response.
+      schema:
+        $ref: '#/components/schemas/MongoId'
+    PracticeSessionId:
+      name: id
+      in: path
+      required: true
+      description: The practice session's own ID, not its bandId.
+      schema:
+        $ref: '#/components/schemas/MongoId'
+      example: '507f1f77bcf86cd799439012'
+  schemas:
+    MongoId:
+      type: string
+      pattern: '^[a-fA-F0-9]{24}$'
+      description: A MongoDB ID made up of 24 hexadecimal characters.
+      example: '507f1f77bcf86cd799439011'
+    BandName:
+      type: string
+      minLength: 2
+      maxLength: 80
+      description: The band's name. Spaces at the start and end are trimmed first.
+      example: The Garage Band
+    Genre:
+      type: string
+      minLength: 2
+      maxLength: 50
+      description: A short genre label. Extra spaces are trimmed.
+      example: Rock
+    TimeZone:
+      type: string
+      minLength: 1
+      maxLength: 64
+      description: A timezone label. This version checks text length, not whether the zone exists.
+      example: Europe/Dublin
+    BandDescription:
+      type: string
+      maxLength: 500
+      description: A short note about the band. Extra spaces are trimmed.
+      example: A band looking for more time to practise.
+    StartTime:
+      type: string
+      format: date-time
+      description: An ISO date-time with a timezone. Z means UTC.
+      example: '2026-11-05T18:00:00Z'
+    DurationMinutes:
+      type: integer
+      minimum: 30
+      maximum: 360
+      description: Practice length in whole minutes, from 30 to 360.
+      example: 90
+    PracticeFormat:
+      type: string
+      enum: [online, in-person]
+      example: in-person
+    LocationOrLink:
+      type: string
+      minLength: 2
+      maxLength: 200
+      description: A room name or meeting link. This version checks text length, not URL format.
+      example: Rehearsal room 2
+    PracticeStatus:
+      type: string
+      enum: [scheduled, completed, cancelled]
+      example: scheduled
+    Notes:
+      type: string
+      maxLength: 500
+      description: Anything the band needs to know. Extra spaces are trimmed.
+      example: Bring the new set list.
+    CreateBand:
+      type: object
+      additionalProperties: false
+      required: [name, timeZone]
+      description: Unknown fields are rejected. Optional fields can be omitted but cannot be null.
+      properties:
+        name:
+          $ref: '#/components/schemas/BandName'
+        genre:
+          $ref: '#/components/schemas/Genre'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        description:
+          $ref: '#/components/schemas/BandDescription'
+    UpdateBand:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Send at least one field. Unknown fields and null values are rejected.
+      properties:
+        name:
+          $ref: '#/components/schemas/BandName'
+        genre:
+          $ref: '#/components/schemas/Genre'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        description:
+          $ref: '#/components/schemas/BandDescription'
+    Band:
+      type: object
+      additionalProperties: false
+      required: [_id, name, timeZone, createdAt, updatedAt]
+      properties:
+        _id:
+          $ref: '#/components/schemas/MongoId'
+        name:
+          $ref: '#/components/schemas/BandName'
+        genre:
+          $ref: '#/components/schemas/Genre'
+        timeZone:
+          $ref: '#/components/schemas/TimeZone'
+        description:
+          $ref: '#/components/schemas/BandDescription'
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Added automatically when the band is saved.
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Updated automatically when the band changes.
+    CreatePracticeSession:
+      type: object
+      additionalProperties: false
+      required: [bandId, startAt, durationMinutes, format, locationOrLink]
+      properties:
+        bandId:
+          $ref: '#/components/schemas/MongoId'
+        startAt:
+          $ref: '#/components/schemas/StartTime'
+        durationMinutes:
+          $ref: '#/components/schemas/DurationMinutes'
+        format:
+          $ref: '#/components/schemas/PracticeFormat'
+        locationOrLink:
+          $ref: '#/components/schemas/LocationOrLink'
+        status:
+          allOf:
+            - $ref: '#/components/schemas/PracticeStatus'
+          default: scheduled
+        notes:
+          $ref: '#/components/schemas/Notes'
+    UpdatePracticeSession:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Send at least one field. bandId is not editable. Null values are rejected.
+      properties:
+        startAt:
+          $ref: '#/components/schemas/StartTime'
+        durationMinutes:
+          $ref: '#/components/schemas/DurationMinutes'
+        format:
+          $ref: '#/components/schemas/PracticeFormat'
+        locationOrLink:
+          $ref: '#/components/schemas/LocationOrLink'
+        status:
+          $ref: '#/components/schemas/PracticeStatus'
+        notes:
+          $ref: '#/components/schemas/Notes'
+    PracticeSession:
+      type: object
+      additionalProperties: false
+      required: [_id, bandId, startAt, durationMinutes, format, locationOrLink, status, createdAt, updatedAt]
+      properties:
+        _id:
+          allOf:
+            - $ref: '#/components/schemas/MongoId'
+          example: '507f1f77bcf86cd799439012'
+        bandId:
+          $ref: '#/components/schemas/MongoId'
+        startAt:
+          $ref: '#/components/schemas/StartTime'
+        durationMinutes:
+          $ref: '#/components/schemas/DurationMinutes'
+        format:
+          $ref: '#/components/schemas/PracticeFormat'
+        locationOrLink:
+          $ref: '#/components/schemas/LocationOrLink'
+        status:
+          $ref: '#/components/schemas/PracticeStatus'
+        notes:
+          $ref: '#/components/schemas/Notes'
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Added automatically when the practice is saved.
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Updated automatically when the practice changes.
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: A short label for the problem.
+        message:
+          type: string
+          description: What went wrong.
+        details:
+          type: array
+          description: Included for Zod validation errors so you can find the fields to fix.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+  responses:
+    BandCreated:
+      description: The band was added. Keep its returned ID for practice sessions.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Band'
+    BandFound:
+      description: The band's current details, including any changes just saved.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Band'
+    PracticeSessionFound:
+      description: The practice's current details, including any changes just saved.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PracticeSession'
+    BadRequest:
+      description: Check the ID, JSON, fields or query parameters and try again.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalidBody:
+              value:
+                error: ValidationError
+                message: Request body is invalid
+                details:
+                  - field: name
+                    message: Band name must be at least 2 characters
+            invalidId:
+              value:
+                error: InvalidIdentifier
+                message: Band ID must be a valid MongoDB ObjectId
+            invalidJson:
+              value:
+                error: InvalidJson
+                message: Request body must contain valid JSON
+            invalidQuery:
+              value:
+                error: ValidationError
+                message: Query parameters are invalid
+                details:
+                  - field: to
+                    message: End date must be on or after start date
+    BandNotFound:
+      description: There is no band with that ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: NotFound
+            message: Band not found
+    PracticeSessionNotFound:
+      description: There is no practice session with that ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: NotFound
+            message: Practice session not found
+    BodyTooLarge:
+      description: The JSON body is larger than the server's default 100 KB limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: PayloadTooLarge
+            message: Request body exceeds the allowed size
+    ServerError:
+      description: Something unexpected went wrong on the server. Details stay in the server log.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: InternalServerError
+            message: An unexpected server error occurred
