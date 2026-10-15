@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { type Server } from "node:http";
+import request from "supertest";
 import mongoose from "mongoose";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   type CreateBandInput,
   type UpdateBandInput,
@@ -53,28 +53,16 @@ type SessionFilter = {
   startAt?: { $gte?: Date; $lte?: Date };
 };
 
-let server: Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-  server = await new Promise<Server>((resolve, reject) => {
-    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
-    listener.once("error", reject);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Test server did not receive a TCP port");
+function createManualRequest(method: string, path: string) {
+  const client = request(app);
+  switch (method) {
+    case "GET": return client.get(path);
+    case "POST": return client.post(path);
+    case "PUT": return client.put(path);
+    case "DELETE": return client.delete(path);
+    default: throw new Error(`Unsupported manual-request method: ${method}`);
   }
-  baseUrl = `http://127.0.0.1:${address.port}`;
-});
-
-afterAll(async () => {
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
+}
 
 function sortValue(session: SessionRecord, field: string) {
   if (field === "startAt") return session.startAt.getTime();
@@ -160,7 +148,8 @@ it("replays all 56 manual requests with their expected statuses and results", as
     [...content.matchAll(/^@(\w+)\s*=\s*(.+)$/gm)]
       .map((match) => [match[1]!, match[2]!.trim()]),
   );
-  variables.set("baseUrl", baseUrl);
+  // Supertest uses the path below; this base address is only for URL parsing.
+  variables.set("baseUrl", "http://localhost");
   const responseIds = new Map<string, string>();
 
   // Resolve the small subset of REST Client variables used by this file.
@@ -190,14 +179,15 @@ it("replays all 56 manual requests with their expected statuses and results", as
     const bodyStart = afterRequest.search(/\r?\n\r?\n/);
     const body = bodyStart < 0 ? undefined
       : resolveVariables(afterRequest.slice(bodyStart).trim());
-    const response = await fetch(url, {
-      method,
-      ...(body ? { headers: { "Content-Type": "application/json" }, body } : {}),
-    });
+    const target = new URL(url);
+    const pendingRequest = createManualRequest(method, target.pathname + target.search);
+    const response = await (body
+      ? pendingRequest.set("Content-Type", "application/json").send(body)
+      : pendingRequest);
     requestCount += 1;
     expect(response.status, `Request ${requestCount}: ${method} ${url}`).toBe(expectedStatus);
-    const text = await response.text();
-    const result = text ? JSON.parse(text) : undefined;
+    const text = response.text;
+    const result = text ? response.body : undefined;
     if (namedRequest) {
       expect(result._id).toMatch(/^[a-f\d]{24}$/i);
       responseIds.set(namedRequest, result._id);

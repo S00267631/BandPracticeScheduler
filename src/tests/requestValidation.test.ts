@@ -1,5 +1,5 @@
-import { type Server } from "node:http";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import request from "supertest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Real HTTP requests exercise Express and Zod; model mocks protect Atlas data.
 const database = vi.hoisted(() => ({
@@ -53,31 +53,6 @@ const writeEndpoints = [
   { method: "PUT", path: `/api/practice-sessions/${resourceId}` },
 ];
 
-let server: Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-  server = await new Promise<Server>((resolve, reject) => {
-    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
-    listener.once("error", reject);
-  });
-  const address = server.address();
-
-  if (!address || typeof address === "string") {
-    throw new Error("Test server did not receive a TCP port");
-  }
-
-  baseUrl = `http://127.0.0.1:${address.port}`;
-});
-
-afterAll(async () => {
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
-
 beforeEach(() => {
   vi.resetAllMocks();
   database.bandCreate.mockResolvedValue({ _id: resourceId, ...validBand });
@@ -86,11 +61,14 @@ beforeEach(() => {
 });
 
 function sendBody(method: string, path: string, body: string) {
-  return fetch(`${baseUrl}${path}`, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
+  const client = request(app);
+  if (method === "POST") {
+    return client.post(path).set("Content-Type", "application/json").send(body);
+  }
+  if (method === "PUT") {
+    return client.put(path).set("Content-Type", "application/json").send(body);
+  }
+  throw new Error(`Unsupported body-validation method: ${method}`);
 }
 
 function expectNoDatabaseCalls() {
@@ -109,7 +87,7 @@ describe("Request parsing", () => {
         const response = await sendBody(method, path, '{"privateValue":"hidden",');
 
         expect(response.status).toBe(400);
-        expect(await response.json()).toEqual({
+        expect(response.body).toEqual({
           error: "InvalidJson",
           message: "Request body must contain valid JSON",
         });
@@ -131,7 +109,7 @@ describe("Request parsing", () => {
       );
 
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual({
+      expect(response.body).toEqual({
         error: "PayloadTooLarge",
         message: "Request body exceeds the allowed size",
       });
@@ -173,7 +151,7 @@ describe("Band body validation", () => {
     const response = await sendBody("POST", "/api/bands", JSON.stringify(body));
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "ValidationError" });
+    expect(response.body).toMatchObject({ error: "ValidationError" });
     expectNoDatabaseCalls();
   });
 
@@ -184,7 +162,7 @@ describe("Band body validation", () => {
       JSON.stringify({ ...validBand, name: "a" }),
     );
 
-    expect(await response.json()).toMatchObject({
+    expect(response.body).toMatchObject({
       error: "ValidationError",
       details: [{ field: "name", message: "Band name must be at least 2 characters" }],
     });
@@ -258,10 +236,12 @@ describe("Resource ID validation", () => {
       : { notes: "Updated" };
     const response = method === "PUT"
       ? await sendBody(method, path, JSON.stringify(updateBody))
-      : await fetch(`${baseUrl}${path}`, { method });
+      : method === "GET"
+        ? await request(app).get(path)
+        : await request(app).delete(path);
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "InvalidIdentifier" });
+    expect(response.body).toMatchObject({ error: "InvalidIdentifier" });
     expectNoDatabaseCalls();
   });
 });

@@ -1,5 +1,5 @@
-import { type Server } from "node:http";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import request from "supertest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Check real query parsing and generated MongoDB filters without using Atlas.
 const database = vi.hoisted(() => ({ find: vi.fn(), sort: vi.fn() }));
@@ -22,30 +22,7 @@ const session = {
   status: "scheduled",
 };
 
-let server: Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-  server = await new Promise<Server>((resolve, reject) => {
-    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
-    listener.once("error", reject);
-  });
-  const address = server.address();
-
-  if (!address || typeof address === "string") {
-    throw new Error("Test server did not receive a TCP port");
-  }
-
-  baseUrl = `http://127.0.0.1:${address.port}/api/practice-sessions`;
-});
-
-afterAll(async () => {
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
+const basePath = "/api/practice-sessions";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -54,7 +31,7 @@ beforeEach(() => {
 });
 
 function getSessions(parameters: Record<string, string> = {}) {
-  return fetch(`${baseUrl}?${new URLSearchParams(parameters)}`);
+  return request(app).get(basePath).query(parameters);
 }
 
 describe("Practice Session filters", () => {
@@ -62,7 +39,7 @@ describe("Practice Session filters", () => {
     const response = await getSessions();
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([session]);
+    expect(response.body).toEqual([session]);
     expect(database.find).toHaveBeenCalledWith({});
     expect(database.sort).toHaveBeenCalledWith({ startAt: 1, _id: 1 });
   });
@@ -132,7 +109,7 @@ describe("Practice Session filters", () => {
     const response = await getSessions({ bandId });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([]);
+    expect(response.body).toEqual([]);
   });
 });
 
@@ -177,7 +154,7 @@ describe("Invalid Practice Session queries", () => {
     const response = await getSessions(parameters);
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
+    expect(response.body).toMatchObject({
       error: "ValidationError",
       message: "Query parameters are invalid",
     });
@@ -188,13 +165,13 @@ describe("Invalid Practice Session queries", () => {
     const response = await getSessions({ from: to, to: from });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
+    expect(response.body).toMatchObject({
       details: [{ field: "to", message: "End date must be on or after start date" }],
     });
   });
 
   it("rejects repeated values rather than selecting one silently", async () => {
-    const response = await fetch(`${baseUrl}?status=scheduled&status=completed`);
+    const response = await request(app).get(`${basePath}?status=scheduled&status=completed`);
 
     expect(response.status).toBe(400);
     expect(database.find).not.toHaveBeenCalled();

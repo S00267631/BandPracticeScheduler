@@ -1,6 +1,6 @@
-import { type Server } from "node:http";
+import request from "supertest";
 import mongoose from "mongoose";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Test HTTP responses with controlled model results, without changing Atlas.
 const database = vi.hoisted(() => ({
@@ -60,31 +60,6 @@ const missingRecordCases = [
   { method: "DELETE", path: sessionPath, operation: "sessionDelete", message: "Practice session not found" },
 ] as const;
 
-let server: Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-  server = await new Promise<Server>((resolve, reject) => {
-    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
-    listener.once("error", reject);
-  });
-  const address = server.address();
-
-  if (!address || typeof address === "string") {
-    throw new Error("Test server did not receive a TCP port");
-  }
-
-  baseUrl = `http://127.0.0.1:${address.port}`;
-});
-
-afterAll(async () => {
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
-
 beforeEach(() => {
   vi.resetAllMocks();
   database.bandCreate.mockResolvedValue(band);
@@ -99,14 +74,15 @@ beforeEach(() => {
   database.sessionCount.mockResolvedValue(0);
 });
 
-function sendRequest(method: string, path: string, body?: unknown) {
-  return fetch(`${baseUrl}${path}`, {
-    method,
-    ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  });
+function sendRequest(method: string, path: string, body?: object) {
+  const client = request(app);
+  switch (method) {
+    case "GET": return client.get(path);
+    case "DELETE": return client.delete(path);
+    case "POST": return body === undefined ? client.post(path) : client.post(path).send(body);
+    case "PUT": return body === undefined ? client.put(path) : client.put(path).send(body);
+    default: throw new Error(`Unsupported resource-test method: ${method}`);
+  }
 }
 
 function updateBodyFor(path: string) {
@@ -125,7 +101,7 @@ describe("Missing records", () => {
       );
 
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: "NotFound", message });
+      expect(response.body).toEqual({ error: "NotFound", message });
     },
   );
 
@@ -144,7 +120,7 @@ describe("Missing records", () => {
     const response = await sendRequest("DELETE", bandPath);
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "NotFound",
       message: "Band not found",
     });
@@ -154,7 +130,7 @@ describe("Missing records", () => {
     const response = await sendRequest("GET", "/api/unknown-resource");
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "NotFound",
       message: "No route matches GET /api/unknown-resource",
     });
@@ -167,7 +143,7 @@ describe("Band and Practice Session relationships", () => {
     const response = await sendRequest("POST", "/api/practice-sessions", sessionBody);
 
     expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: "NotFound", message: "Band not found" });
+    expect(response.body).toEqual({ error: "NotFound", message: "Band not found" });
     expect(database.sessionCreate).not.toHaveBeenCalled();
   });
 
@@ -176,7 +152,7 @@ describe("Band and Practice Session relationships", () => {
     const response = await sendRequest("DELETE", bandPath);
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "Conflict",
       message: "Delete the band's practice sessions before deleting the band",
     });
@@ -195,11 +171,11 @@ describe("Band and Practice Session relationships", () => {
 
     const deleteSession = await sendRequest("DELETE", sessionPath);
     expect(deleteSession.status).toBe(204);
-    expect(await deleteSession.text()).toBe("");
+    expect(deleteSession.text).toBe("");
 
     const deleteBand = await sendRequest("DELETE", bandPath);
     expect(deleteBand.status).toBe(204);
-    expect(await deleteBand.text()).toBe("");
+    expect(deleteBand.text).toBe("");
     expect(database.bandDelete).toHaveBeenCalledWith(bandId);
   });
 
@@ -207,7 +183,7 @@ describe("Band and Practice Session relationships", () => {
     const response = await sendRequest("PUT", sessionPath, { notes: "Updated" });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ bandId, notes: "Updated" });
+    expect(response.body).toMatchObject({ bandId, notes: "Updated" });
     expect(database.sessionUpdate).toHaveBeenCalledWith(
       sessionId,
       { $set: { notes: "Updated" } },
@@ -246,7 +222,7 @@ describe("Database errors", () => {
         const response = await sendRequest(method, path, body);
 
         expect(response.status).toBe(500);
-        expect(await response.json()).toEqual({
+        expect(response.body).toEqual({
           error: "InternalServerError",
           message: "An unexpected server error occurred",
         });
@@ -261,7 +237,7 @@ describe("Database errors", () => {
     const response = await sendRequest("PUT", bandPath, { name: "Updated Band" });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "ValidationError",
       message: "Database validation failed",
     });
@@ -274,7 +250,7 @@ describe("Database errors", () => {
     const response = await sendRequest("GET", sessionPath);
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
+    expect(response.body).toEqual({
       error: "InvalidIdentifier",
       message: "A supplied identifier is invalid",
     });
